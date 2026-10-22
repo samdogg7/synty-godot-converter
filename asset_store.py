@@ -87,8 +87,12 @@ def build_source_files(package_path: Path, dest: Path) -> dict[str, float]:
     for guid, p in path.items():
         if not p.lower().endswith(".fbx") or "asset" not in assets[guid]:
             continue
+        name = _safe_file_name(p)
+        if name is None:
+            logger.warning("Skipping FBX with unsafe path in package: %r", p)
+            continue
         data = assets[guid]["asset"]
-        (fbx_dir / PurePosixPath(p).name).write_bytes(data)
+        (fbx_dir / name).write_bytes(data)
         meta = assets[guid].get("asset.meta", b"").decode(errors="ignore")
         mesh_ids[guid] = _mesh_ids_from_meta(meta)
         fbx_names[guid] = _fbx_node_names(data)
@@ -96,7 +100,7 @@ def build_source_files(package_path: Path, dest: Path) -> dict[str, float]:
         # to animation and humanoid settings.
         scale = re.search(r"^\s*globalScale: ([\d.e-]+)", meta, re.M)
         if scale and float(scale.group(1)) != 1.0:
-            scales[PurePosixPath(p).name] = float(scale.group(1))
+            scales[name] = float(scale.group(1))
 
     materials = {
         guid: _material_slot(p, assets[guid]["asset"], path)
@@ -200,6 +204,18 @@ def _read_package(package_path: Path) -> dict[str, dict[str, bytes]]:
             if file_obj is not None:
                 data[parts[0]][parts[1]] = file_obj.read()
     return {guid: files for guid, files in data.items() if "pathname" in files}
+
+
+def _safe_file_name(asset_path: str) -> str | None:
+    """Final path component, or None if it could escape the destination folder.
+
+    Pathnames come from the package, so a crafted one may use Windows separators
+    or drive letters that PurePosixPath would keep inside .name.
+    """
+    name = PurePosixPath(asset_path.replace("\\", "/")).name
+    if not name or name in (".", "..") or ":" in name:
+        return None
+    return name
 
 
 def _first_line(pathname: bytes) -> str:
